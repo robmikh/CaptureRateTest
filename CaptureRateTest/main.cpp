@@ -3,6 +3,7 @@
 namespace winrt
 {
     using namespace Windows::Foundation;
+    using namespace Windows::Foundation::Metadata;
     using namespace Windows::Foundation::Numerics;
     using namespace Windows::UI;
     using namespace Windows::Graphics::Capture;
@@ -37,6 +38,7 @@ struct Options
 {
     CaptureSubject Subject;
     uint32_t IntervalInMs;
+    bool NoBorder;
 };
 
 struct MonitorCaptureItemSource
@@ -77,6 +79,7 @@ int __stdcall wmain(int argc, wchar_t* argv[])
         return 1;
     }
     auto source = sourceOpt.value();
+    bool noBorder = options->NoBorder;
 
     // Init D3D
     auto d3dDevice = util::CreateD3DDevice();
@@ -93,7 +96,7 @@ int __stdcall wmain(int argc, wchar_t* argv[])
     winrt::GraphicsCaptureSession session{ nullptr };
     winrt::DispatcherQueueTimer timer{ nullptr };
     wil::shared_event captureThreadEvent(wil::EventOptions::None);
-    queue.TryEnqueue([captureThreadEvent, &framePool, &session, &frame, &timer, device, source, interval, queue]()
+    queue.TryEnqueue([captureThreadEvent, &framePool, &session, &frame, &timer, device, source, interval, queue, noBorder]()
         {
             auto item = CreateCaptureItemFromSource(source);
             framePool = winrt::Direct3D11CaptureFramePool::Create(
@@ -106,6 +109,11 @@ int __stdcall wmain(int argc, wchar_t* argv[])
                 {
                     frame = sender.TryGetNextFrame();
                 });
+            session.IsCursorCaptureEnabled(false);
+            if (noBorder)
+            {
+                session.IsBorderRequired(false);
+            }
 
             timer = queue.CreateTimer();
             timer.Interval(std::chrono::milliseconds(interval));
@@ -126,7 +134,7 @@ int __stdcall wmain(int argc, wchar_t* argv[])
     captureThreadEvent.wait();
 
     // Wait
-    wprintf(L"Press ENTER to exit...\n");
+    wprintf(L"Press ENTER to stop...\n");
     std::wstring tempString;
     std::getline(std::wcin, tempString);
 
@@ -280,12 +288,16 @@ std::optional<Options> ParseOptions(int argc, wchar_t* argv[], bool& error)
         wprintf(L"  -window   [value]            Specify the window to capture via title substring search.\n");
         wprintf(L"                                 Conflicts with 'monitor'.\n");
         wprintf(L"\n");
+        wprintf(L"Flags:\n");
+        wprintf(L"  -noBorder         (optional) Disable the yellow border. Only available on Windows 11.\n");
+        wprintf(L"\n");
         error = false;
         return std::nullopt;
     }
     auto intervalString = robmikh::common::wcli::impl::GetFlagValue(args, L"-interval", L"-i");
     auto monitorString = robmikh::common::wcli::impl::GetFlagValue(args, L"-monitor", L"-m");
     auto windowString = robmikh::common::wcli::impl::GetFlagValue(args, L"-window", L"-w");
+    bool noBorder = robmikh::common::wcli::impl::GetFlag(args, L"-noBorder") || robmikh::common::wcli::impl::GetFlag(args, L"/noBorder");
     
     uint32_t interval = 1000;
     if (!intervalString.empty())
@@ -331,6 +343,12 @@ std::optional<Options> ParseOptions(int argc, wchar_t* argv[], bool& error)
         subject = CaptureSubject(MonitorCaptureSubject{ monitorIndex });
     }
 
+    if (noBorder && !winrt::ApiInformation::IsPropertyPresent(winrt::name_of<winrt::GraphicsCaptureSession>(), L"IsBorderRequired"))
+    {
+        wprintf(L"Ignoring 'noBorder', this build of Windows does not support the feature.\n");
+        noBorder = false;
+    }
+
     error = false;
-    return std::optional(Options{ subject, interval });
+    return std::optional(Options{ subject, interval, noBorder });
 }
